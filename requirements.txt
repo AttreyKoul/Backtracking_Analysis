@@ -1,0 +1,14 @@
+# Packages used by the code in this repository.
+# The analyses ran on Google Colab; the exact versions of each run are logged in
+# its manifest.json (python, torch, transformers, numpy, scipy, scikit-learn, GPU).
+# The smoke test needs only: numpy scipy scikit-learn torch joblib openpyxl
+numpy
+scipy
+scikit-learn
+joblib
+torch
+transformers
+datasets
+sentence-transformers
+openai
+openpyxl

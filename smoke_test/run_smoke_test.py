@@ -41,6 +41,25 @@ REPO = Path(__file__).resolve().parents[1]
 VERBOSE = "--verbose" in sys.argv
 KEEP = "--keep" in sys.argv          # keep the temp data folder for inspection
 
+# packages the repository's code needs to run here; the model, API and Colab
+# libraries (transformers, datasets, sentence-transformers, openai, google.colab)
+# are replaced by fakes, so they are not needed for the smoke test
+_NEEDED = {"numpy": "numpy", "scipy": "scipy", "sklearn": "scikit-learn", "torch": "torch",
+           "joblib": "joblib", "openpyxl": "openpyxl"}
+_missing = []
+for _mod, _pkg in _NEEDED.items():
+    try:
+        __import__(_mod)
+    except ImportError:
+        _missing.append(_pkg)
+if _missing:
+    print("The smoke test needs these packages, which are not installed in this Python:\n"
+          f"    {' '.join(_missing)}\n"
+          f"Install them, then run the smoke test again:\n"
+          f"    {sys.executable} -m pip install {' '.join(_missing)}\n"
+          "(or: pip install -r requirements.txt)")
+    sys.exit(2)
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -298,8 +317,8 @@ def install_stubs():
 # =============================================================================
 def code_cells(path):
     if path.suffix == ".py":
-        return [path.read_text()]
-    nb = json.load(open(path))
+        return [path.read_text(encoding="utf-8")]
+    nb = json.load(open(path, encoding="utf-8"))
     out = []
     for c in nb["cells"]:
         if c["cell_type"] != "code":
@@ -315,6 +334,10 @@ def run(name, path, patches=(), ns_extra=None, expect_exit=False, cells=None):
     (regex, replacement) pairs applied to the code; each must match at least
     once, so a renamed constant fails loudly instead of being silently ignored."""
     t0 = time.time()
+    if cells is None and not Path(path).exists():
+        RESULTS.append((name, "FAIL", f"file not found: {path}", 0))
+        print(f"  FAIL  {name}  (file not found)", flush=True)
+        return None
     srcs = cells if cells is not None else code_cells(path)
     hit = [0] * len(patches)
     out = []
@@ -364,11 +387,21 @@ def run(name, path, patches=(), ns_extra=None, expect_exit=False, cells=None):
 def static_checks():
     print("\n[1] static checks")
     files = sorted(list(REPO.rglob("*.ipynb")) + list(REPO.rglob("*.py")))
-    files = [f for f in files if ".ipynb_checkpoints" not in str(f) and "smoke_test" not in str(f)]
+    # only the repository's own code: skip virtual environments, installed
+    # packages, git internals and any other hidden folder
+    _skip = {"site-packages", "dist-packages", "node_modules", "__pycache__", "venv", "env"}
+    files = [f for f in files
+             if not any(part in _skip or part.startswith(".") for part in f.relative_to(REPO).parts[:-1])
+             and "smoke_test" not in f.relative_to(REPO).parts]
     bad_parse, bad_terms, keys, paths = [], [], [], []
     term = re.compile("hier" + r"arch|scope_flag|SCOPE_ANALYSIS|kill_screen|Untitled10", re.I)
     for f in files:
-        for i, s in enumerate(code_cells(f) if f.suffix == ".ipynb" or f.suffix == ".py" else []):
+        try:
+            cells_ = code_cells(f) if f.suffix in (".ipynb", ".py") else []
+        except Exception as e:                  # not UTF-8, not valid JSON, ...
+            bad_parse.append(f"{f.relative_to(REPO)}: cannot be read ({type(e).__name__}: {str(e)[:80]})")
+            cells_ = []
+        for i, s in enumerate(cells_):
             try:
                 ast.parse(s)
             except SyntaxError as e:
@@ -408,7 +441,7 @@ def main():
     os.environ["P2_BASE"] = str(data)
     os.chdir(tmp)
     print(f"\n[2] pipeline on synthetic data in {tmp}")
-    P = REPO / "pipeline"; S = REPO / "superseded"; A = REPO / "analyses"
+    P = REPO / "pipeline"; A = REPO / "analyses"
     try:
         for m in R1 + [INSTRUCT]:
             run(f"01 generate traces [{m}]", P / "01_generate_traces.ipynb",
@@ -433,27 +466,34 @@ def main():
         run("analyses: probe robustness checks (1a-1d)", A / "probe_robustness_checks.py", probe_small)
         ns = run("analyses: probe robustness checks (finished: re-run does nothing)", A / "probe_robustness_checks.py",
                  probe_small)
-        if ns is not None:
+        stopped = "the probe script stopped before finishing; its own error is the FAIL line just above"
+        if ns is None or "missing" not in ns:
+            RESULTS.append(("probe checks: nothing left after a full run", "FAIL", stopped, 0))
+        else:
             left = {m: ns["missing"](m) for m in ns["MODELS"]}
             RESULTS.append(("probe checks: nothing left after a full run",
                             "PASS" if not any(left.values()) else "FAIL", str({m: v for m, v in left.items() if v}), 0))
         # a new runtime mid-way: local cache gone, part of 1d not yet saved
         out_j = data / "hand_labeling_export" / "probe_robustness_checks.json"
-        res = json.load(open(out_j)); m0 = "DeepSeek-R1-Distill-Qwen-7B"
-        for k in ["marker-1", "marker+0", "paragraph_break_before_marker"]:
-            res["1d"][m0].pop(k, None)
-        json.dump(res, open(out_j, "w"))
-        shutil.rmtree(tmp / "probe_cache", ignore_errors=True)
-        ns = run("analyses: probe robustness checks (resume on a new runtime)", A / "probe_robustness_checks.py",
-                 probe_small)
-        if ns is not None:
-            left = ns["missing"](m0)
-            RESULTS.append(("probe checks: resume on a new runtime completes 1d",
-                            "PASS" if not left else "FAIL", str(left), 0))
+        m0 = "DeepSeek-R1-Distill-Qwen-7B"
+        try:
+            res = json.load(open(out_j))
+            for k in ["marker-1", "marker+0", "paragraph_break_before_marker"]:
+                res["1d"][m0].pop(k, None)
+            json.dump(res, open(out_j, "w"))
+            shutil.rmtree(tmp / "probe_cache", ignore_errors=True)
+            ns = run("analyses: probe robustness checks (resume on a new runtime)", A / "probe_robustness_checks.py",
+                     probe_small)
+            if ns is None or "missing" not in ns:
+                RESULTS.append(("probe checks: resume on a new runtime completes 1d", "FAIL", stopped, 0))
+            else:
+                left = ns["missing"](m0)
+                RESULTS.append(("probe checks: resume on a new runtime completes 1d",
+                                "PASS" if not left else "FAIL", str(left), 0))
+        except Exception as e:
+            RESULTS.append(("probe checks: resume on a new runtime completes 1d", "FAIL",
+                            f"no saved probe results to resume from ({type(e).__name__}: {e}); {stopped}", 0))
         run("analyses: Llama-8B window alignment diagnostic", A / "diagnose_llama8b_window_alignment.py")
-        run("superseded: locate Llama-8B windows (GPU)", S / "locate_llama8b_windows_gpu.py",
-            [(r'\("DeepSeek-R1-Distill-Qwen-7B", 18, 5\)', '("DeepSeek-R1-Distill-Qwen-7B", 2, 3)'),
-             (r'\("DeepSeek-R1-Distill-Llama-8B", 14, 20\)', '("DeepSeek-R1-Distill-Llama-8B", 2, 3)')])
         st = r'^STAGES = \["revision", "filler"\]'
         run("11 re-extract Llama-8B [revision, filler]", P / "11_reextract_llama8b.py")
         run("11 re-extract Llama-8B [verify]", P / "11_reextract_llama8b.py", [(st, 'STAGES = ["verify"]')])
@@ -471,14 +511,22 @@ def main():
         run("08 steering directions + strength", P / "08_steering_directions_and_strength.ipynb",
             [(r"^ALPHA_MULTIPLIERS\s*=\s*\[[^\]]*\]", "ALPHA_MULTIPLIERS = [0.0, 1.0]")])
 
-        # superseded necessity notebooks (they produce the 'published' files the re-run compares against)
-        run("superseded: lexical revision arm", S / "necessity_lexical_revision_arm.py")
-        run("superseded: lexical filler arm", S / "necessity_lexical_filler_arm.ipynb",
-            [(r"^STAGES\s*=\s*\[0\]", "STAGES = [1, 2, 3]")])
-        run("superseded: steering both arms", S / "necessity_steering_both_arms.ipynb",
-            [(r"^STAGES\s*=\s*\[0\]\s*$", "STAGES = [0, 1, 2, 3]")])
-        run("superseded: verification + leak audit", S / "necessity_verification_and_leak_audit.ipynb")
-        run("superseded: parser comparison", S / "parser_comparison_on_published_rollouts.ipynb")
+        # 09's original-sample select reads the published filler-arm event file (on
+        # Drive in a real run); write a synthetic stand-in from the confirmed fillers.
+        ex_ = data / "hand_labeling_export"
+        if not (ex_ / "filler_control_pilot_events.json").exists():
+            fevs = []
+            for m in R1:
+                for fl in json.load(open(data / "rejects" / f"{m}_confirmed_filler.json"))[:6]:
+                    tr = json.load(open(data / "traces" / m / f"{fl['problem_id']}.json"))
+                    if tr.get("truncated") or not tr.get("correct"): continue
+                    fevs.append({"eid": len(fevs), "model": m, "problem_id": fl["problem_id"],
+                                 "char_start": fl["char_start"], "marker_phrase": fl.get("matched_text"),
+                                 "problem": tr["problem"], "difficulty": tr["difficulty"],
+                                 "answer_gt": tr["answer_gt"], "round": 1 + len(fevs) % 2,
+                                 "prefix_response_text": tr["full_response"][:fl["char_start"]]})
+            json.dump(fevs, open(ex_ / "filler_control_pilot_events.json", "w"), indent=1)
+            print(f"  synthetic filler events for 09: {len(fevs)}", flush=True)
 
         for stage in ("select", "lexical", "steering", "analyze"):
             if stage == "analyze":      # stand-in for the first steering re-run (seed 1000 + r)
@@ -505,16 +553,33 @@ def main():
         run("analyses: probe surface form and marker-token table", A / "probe_surface_and_position.py", sp_small)
         run("analyses: probe surface form and marker-token table (finished: re-run does nothing)",
             A / "probe_surface_and_position.py", sp_small)
+        # the one-cell runner for the Nov 6 checks: embedded copies must be current
+        if (P / "RUN_nov6_checks_all.py").exists():
+            _src = (P / "RUN_nov6_checks_all.py").read_text()
+            _ns = {}; exec(_src[_src.index("SRC = {}"):_src.index("\ndef patched(")], _ns)
+            _nbsrc = "\n\n".join("".join(c["source"]) for c in json.load(open(A / "embedding_divergence_final.ipynb"))["cells"]
+                                  if c["cell_type"] == "code")
+            _same = {"necessity": _ns["SRC"]["necessity"] == (P / "09_necessity_rerun.py").read_text(),
+                     "divergence": _ns["SRC"]["divergence"] == _nbsrc,
+                     "probe": _ns["SRC"]["probe"] == (A / "probe_surface_and_position.py").read_text()}
+            RESULTS.append(("RUN_nov6_checks_all embeds the current 09, divergence and probe code",
+                            "PASS" if all(_same.values()) else "FAIL", str(_same), 0))
+            for _f in ("divergence_final.json", "divergence_final_repaired_flag.json"):
+                (data / "hand_labeling_export" / _f).unlink(missing_ok=True)
+            run("RUN_nov6_checks_all (4 steps in one cell)", P / "RUN_nov6_checks_all.py")
+            run("RUN_nov6_checks_all again (everything skips)", P / "RUN_nov6_checks_all.py")
         (data / "hand_labeling_export" / "steering_directions_llama8b_reextract.json").unlink(missing_ok=True)
-        _src = (P / "RUN_llama8b_direction_all.py").read_text()
-        _ns = {}; exec(_src[_src.index("SRC = {}"):_src.index("\ndef patched(")], _ns)
-        _same = {k: _ns["SRC"][k] == f.read_text() for k, f in
-                 [("reextract", P / "11_reextract_llama8b.py"), ("necessity", P / "09_necessity_rerun.py"),
-                  ("efficacy", A / "steering_efficacy_rerun.py")]}
-        RESULTS.append(("RUN_llama8b_direction_all embeds the current 11, 09 and efficacy scripts",
-                        "PASS" if all(_same.values()) else "FAIL", str(_same), 0))
-        run("RUN_llama8b_direction_all (4 steps in one file)", P / "RUN_llama8b_direction_all.py")
-        run("RUN_llama8b_direction_all again (everything resumes / skips)", P / "RUN_llama8b_direction_all.py")
+        if (P / "RUN_llama8b_direction_all.py").exists():
+            _src = (P / "RUN_llama8b_direction_all.py").read_text()
+            _ns = {}; exec(_src[_src.index("SRC = {}"):_src.index("\ndef patched(")], _ns)
+            _same = {k: _ns["SRC"][k] == f.read_text() for k, f in
+                     [("reextract", P / "11_reextract_llama8b.py"), ("necessity", P / "09_necessity_rerun.py"),
+                      ("efficacy", A / "steering_efficacy_rerun.py")]}
+            RESULTS.append(("RUN_llama8b_direction_all embeds the current 11, 09 and efficacy scripts",
+                            "PASS" if all(_same.values()) else "FAIL", str(_same), 0))
+        if (P / "RUN_llama8b_direction_all.py").exists():
+            run("RUN_llama8b_direction_all (4 steps in one file)", P / "RUN_llama8b_direction_all.py")
+            run("RUN_llama8b_direction_all again (everything resumes / skips)", P / "RUN_llama8b_direction_all.py")
         for stage in ("select", "analyze"):
             run(f"09 necessity re-run, redraw sample [{stage}]", P / "09_necessity_rerun.py",
                 [(r'^STAGE\s*=\s*"select"', f'STAGE = "{stage}"'), (r'^SAMPLE\s*=\s*"original"', 'SAMPLE = "redraw"'),
@@ -539,15 +604,6 @@ def main():
             [(r"^N_BOOT\s*=\s*2000", "N_BOOT = 20"), (r"^N_BOOT\s*=\s*1500", "N_BOOT = 20"),
              (r"^N_DRAWS\s*=\s*40", "N_DRAWS = 3")])
 
-        # superseded audits: independent sections; some search the Drive for code
-        cells = code_cells(S / "audits_during_revision.ipynb")
-        # never let the code search walk a real mounted Drive from the test
-        cells = [c.replace('Path("/content")', 'Path(os.environ["REVISION_DATA_ROOT"])') for c in cells]
-        for i, s in enumerate(cells[1:], start=1):
-            first = next((l for l in s.splitlines() if l.strip().startswith("#") and len(l.strip()) > 8
-                          and not set(l.strip()) <= set("#=- ")), f"cell {i}")
-            run(f"superseded audits: {first.strip('# ').strip()[:60]}", S / "audits_during_revision.ipynb",
-                [], cells=[cells[0], s], expect_exit=True)
     finally:
         os.chdir(REPO)
         if KEEP:
@@ -609,8 +665,8 @@ def report():
             print(f"  {st:<5} {name}\n        {detail}")
     print(f"\n  {c['PASS']} passed, {c['WARN']} warnings, {c['FAIL']} failed "
           f"(of {len(RESULTS)} checks)")
-    print("  WARN = expected: a superseded audit that needs code not in this repository,\n"
-          "  or the necessity event files not yet copied into data/. FAIL = fix before a real run.")
+    print("  WARN = expected: the necessity event files not yet copied into data/.\n"
+          "  FAIL = fix before a real run.")
     out = REPO / "smoke_test" / "last_report.txt"
     out.write_text("\n".join(f"{st}\t{name}\t{detail}" for name, st, detail, _ in RESULTS))
     print(f"  full report: {out}")

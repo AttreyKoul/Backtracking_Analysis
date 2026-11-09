@@ -1,0 +1,63 @@
+PASS	static: necessity event files in data/	
+PASS	static: all code parses	
+PASS	static: no retired local/global code	
+PASS	static: no API keys	
+PASS	static: no personal paths	
+PASS	01 generate traces [DeepSeek-R1-Distill-Llama-8B]	
+PASS	01 generate traces [DeepSeek-R1-Distill-Qwen-1.5B]	
+PASS	01 generate traces [DeepSeek-R1-Distill-Qwen-7B]	
+PASS	01 generate traces [DeepSeek-R1-Distill-Qwen-14B]	
+PASS	01 generate traces [Llama-3.1-8B-Instruct]	
+PASS	02 detect + verify revisions [DeepSeek-R1-Distill-Llama-8B]	
+PASS	02 detect + verify revisions [DeepSeek-R1-Distill-Qwen-1.5B]	
+PASS	02 detect + verify revisions [DeepSeek-R1-Distill-Qwen-7B]	
+PASS	02 detect + verify revisions [DeepSeek-R1-Distill-Qwen-14B]	
+PASS	02 detect + verify revisions [Llama-3.1-8B-Instruct]	
+PASS	03 revision activations [DeepSeek-R1-Distill-Llama-8B]	
+PASS	03 revision activations [DeepSeek-R1-Distill-Qwen-1.5B]	
+PASS	03 revision activations [DeepSeek-R1-Distill-Qwen-7B]	
+PASS	03 revision activations [DeepSeek-R1-Distill-Qwen-14B]	
+PASS	03 baseline activations [Llama-3.1-8B-Instruct]	
+PASS	04 recover + confirm fillers	
+PASS	05 filler activations [DeepSeek-R1-Distill-Llama-8B]	
+PASS	05 filler activations [DeepSeek-R1-Distill-Qwen-1.5B]	
+PASS	05 filler activations [DeepSeek-R1-Distill-Qwen-7B]	
+PASS	05 filler activations [DeepSeek-R1-Distill-Qwen-14B]	
+PASS	06 matched-marker probe (A+B)	
+PASS	analyses: probe robustness checks (1a-1d)	
+PASS	analyses: probe robustness checks (finished: re-run does nothing)	
+PASS	probe checks: nothing left after a full run	{}
+PASS	analyses: probe robustness checks (resume on a new runtime)	
+PASS	probe checks: resume on a new runtime completes 1d	[]
+PASS	analyses: Llama-8B window alignment diagnostic	
+PASS	11 re-extract Llama-8B [revision, filler]	
+PASS	11 re-extract Llama-8B [verify]	
+PASS	11 re-extract Llama-8B [probe]	
+PASS	11 re-extract Llama-8B [revision, filler] again (resume: nothing to do)	
+PASS	analyses: probe robustness checks on the Llama-8B re-extraction	
+PASS	07 repair ground truth	
+PASS	08 steering directions + strength	
+PASS	09 necessity re-run [select]	
+PASS	09 necessity re-run [lexical]	
+PASS	09 necessity re-run [steering]	
+PASS	09 necessity re-run [analyze]	
+PASS	analyses: steering efficacy on the re-run [baseline]	
+PASS	analyses: steering efficacy on the re-run [report]	
+PASS	11 re-extract Llama-8B [direction]	
+PASS	09 necessity re-run, Llama-8B rebuilt direction [steering]	
+PASS	09 necessity re-run, Llama-8B rebuilt direction [analyze]	
+PASS	analyses: steering efficacy with the rebuilt Llama-8B direction [report]	
+PASS	analyses: probe surface form and marker-token table	
+PASS	analyses: probe surface form and marker-token table (finished: re-run does nothing)	
+PASS	RUN_llama8b_direction_all embeds the current 11, 09 and efficacy scripts	{'reextract': True, 'necessity': True, 'efficacy': True}
+PASS	RUN_llama8b_direction_all (4 steps in one file)	
+PASS	RUN_llama8b_direction_all again (everything resumes / skips)	
+PASS	09 necessity re-run, redraw sample [select]	
+PASS	09 necessity re-run, redraw sample [analyze]	
+PASS	10 GPT-4o validation [part 1: export]	
+PASS	10 GPT-4o validation [part 2: score]	
+PASS	analyses: embedding divergence (4 parts)	
+PASS	analyses: divergence, final (paper numbers)	
+PASS	analyses: divergence, final (re-run from saved per-event values)	
+PASS	analyses: divergence, final, repaired correctness flag	
+PASS	analyses: divergence regression + draw stability	
